@@ -1,0 +1,111 @@
+name: CI - Build & Test
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  # ============================================================
+  # JOB 1: Build & Test Backend (.NET)
+  # ============================================================
+  backend-ci:
+    name: 🔨 Backend Build & Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: ⬇️ Checkout source
+        uses: actions/checkout@v4
+
+      - name: 🔧 Setup .NET 9
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "9.0.x"
+
+      - name: 📦 Restore NuGet packages
+        run: dotnet restore backend/CloneEbay.sln
+
+      - name: 🏗️ Build backend (Release)
+        run: dotnet build backend/CloneEbay.sln --configuration Release --no-restore
+
+      - name: ✅ Run backend tests (if any)
+        run: |
+          if find backend -name "*.Tests.csproj" | grep -q .; then
+            dotnet test backend/CloneEbay.sln --no-build --configuration Release --verbosity normal
+          else
+            echo "No test projects found, skipping tests."
+          fi
+
+  # ============================================================
+  # JOB 2: Build Frontend (React)
+  # ============================================================
+  frontend-ci:
+    name: 🌐 Frontend Build & Lint
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: ⬇️ Checkout source
+        uses: actions/checkout@v4
+
+      - name: 🔧 Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/clone-ebay-fe/package-lock.json
+
+      - name: 📦 Install dependencies
+        working-directory: frontend/clone-ebay-fe
+        run: npm ci
+
+      - name: 🔍 Lint frontend code
+        working-directory: frontend/clone-ebay-fe
+        run: npm run lint || echo "Lint warnings found (non-blocking)"
+
+      - name: 🏗️ Build frontend
+        working-directory: frontend/clone-ebay-fe
+        run: npm run build
+
+      - name: 📁 Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/clone-ebay-fe/dist/
+          retention-days: 1
+
+  # ============================================================
+  # JOB 3: Docker Build Validation
+  # ============================================================
+  docker-build-check:
+    name: 🐳 Docker Build Validation
+    runs-on: ubuntu-latest
+    needs: [ backend-ci, frontend-ci ]
+
+    steps:
+      - name: ⬇️ Checkout source
+        uses: actions/checkout@v4
+
+      - name: 🐳 Build backend Docker image
+        run: |
+          docker build \
+            -f backend/Dockerfile \
+            -t ebay-backend:ci-test \
+            --no-cache \
+            . 
+          echo "✅ Backend Docker image built successfully"
+
+      - name: 🐳 Build frontend Docker image
+        run: |
+          docker build \
+            -f frontend/Dockerfile \
+            -t ebay-frontend:ci-test \
+            --no-cache \
+            .
+          echo "✅ Frontend Docker image built successfully"
+
+      - name: 🧹 Clean up Docker images
+        if: always()
+        run: |
+          docker rmi ebay-backend:ci-test || true
+          docker rmi ebay-frontend:ci-test || true
