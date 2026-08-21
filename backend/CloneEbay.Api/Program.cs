@@ -71,13 +71,11 @@ builder.Services
 // ======================
 // CORS
 
-var feOrigin = builder.Configuration["Frontend:BaseUrl"] ?? "http://localhost:5173";
-
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("fe", policy =>
     {
-        policy.WithOrigins(feOrigin)
+        policy.SetIsOriginAllowed(_ => true)
             .AllowAnyHeader()
             .AllowAnyMethod()
             .AllowCredentials();
@@ -328,5 +326,44 @@ app.UseStatusCodePages(async context =>
 });
 app.MapGet("/ping", () => Results.Ok(new { message = "pong" }));
 app.MapHealthChecks("/health");
+
+// Auto-create database & tables if not exist
+using (var scope = app.Services.CreateScope())
+{
+    var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
+    var db = scope.ServiceProvider.GetRequiredService<CloneEbay.Infrastructure.Persistence.CloneEbayDbContext>();
+    var maxRetries = 12;
+    while (maxRetries > 0)
+    {
+        try
+        {
+            logger.LogInformation("Checking and creating database if not exists...");
+            db.Database.EnsureCreated();
+            logger.LogInformation("Database created / verified successfully.");
+
+            // Seed initial categories if empty
+            if (!db.Category.Any())
+            {
+                db.Category.AddRange(
+                    new CloneEbay.Domain.Entities.Category { name = "Electronics" },
+                    new CloneEbay.Domain.Entities.Category { name = "Fashion & Apparel" },
+                    new CloneEbay.Domain.Entities.Category { name = "Home & Garden" },
+                    new CloneEbay.Domain.Entities.Category { name = "Collectibles & Art" },
+                    new CloneEbay.Domain.Entities.Category { name = "Motors & Parts" },
+                    new CloneEbay.Domain.Entities.Category { name = "Sporting Goods" }
+                );
+                db.SaveChanges();
+                logger.LogInformation("Default categories seeded.");
+            }
+            break;
+        }
+        catch (Exception ex)
+        {
+            maxRetries--;
+            logger.LogWarning("Waiting for SQL Server to be ready ({Retries} retries left): {Message}", maxRetries, ex.Message);
+            Thread.Sleep(5000);
+        }
+    }
+}
 
 app.Run();
